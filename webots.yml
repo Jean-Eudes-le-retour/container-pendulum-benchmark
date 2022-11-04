@@ -1,7 +1,7 @@
 publish: true
 type: benchmark
 world:
-  file: worlds/robot_programming.wbt
-  max-duration: 30
-  metric: percent
+  file: worlds/inverted_pendulum.wbt
+  max-duration: 10
+  metric: time-duration
 dockerCompose: theia:webots-project/controllers/edit_me/
