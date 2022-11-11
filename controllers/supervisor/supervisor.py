@@ -8,12 +8,6 @@ from controller import Supervisor
 import os
 import random
 import sys
-import time as timeLib
-
-# set to True if you want to generate an animation of your controller to ./storage/local
-RECORD_ANIMATION = False
-
-import recorder.recorder as rec
 
 def benchmarkPerformance(message, robot):
     benchmark_name = message.split(':')[1]
@@ -40,12 +34,6 @@ forceStep = 800
 random.seed(seed)
 running = True
 
-if RECORD_ANIMATION:
-    # Recorder code: wait for the controller to connect and start the animation
-    rec.animation_start_and_connection_wait(robot)
-    step_max = 1000 * rec.MAX_DURATION / timestep
-    step_counter = 0
-
 while robot.step(timestep) != -1 and running:
     if running:
         time = robot.getTime()
@@ -58,9 +46,7 @@ while robot.step(timestep) != -1 and running:
             # stop
             running = False
             name = "Inverted Pendulum"
-            performance = str(time)
-            performanceString = rec.time_convert(time)
-            message = 'success:' + name + ':' + performance + ':' + performanceString
+            message = f'success:{name}:{time}'
             robot.wwiSendText(message)
         else:
             if forceStep <= 0:
@@ -72,17 +58,11 @@ while robot.step(timestep) != -1 and running:
                 emitter.send(toSend)
             else:
                 forceStep = forceStep - 1
-    if RECORD_ANIMATION:
-        # Stops the simulation if the controller takes too much time
-        step_counter += 1
-        if step_counter >= step_max:
-            break
 
-if RECORD_ANIMATION:
-    # Write performance to file, stop recording and close Webots
-    rec.record_performance(running, time)
-    rec.animation_stop(robot, timestep)
-    robot.simulationQuit(0)
+# Performance output used by automated CI script
+CI = os.environ.get("CI")
+if CI:
+    print(f"performance_line:{time}")
 else:
     benchmarkPerformance(message, robot)
 

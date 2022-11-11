@@ -46,17 +46,13 @@ window.robotWindow.receive = function(message, robot) {
     const newMessage = message.replace('success', 'confirm');
     document.getElementById('time-display').style.color = 'green';
     this.send(newMessage)
-    setSuccessMessage(benchmarkName, message.split(':')[3]);
+    setSuccessMessage(benchmarkName, metricToString(message.split(':')[3]));
     toggleModal();
   } else
     console.log("Received unknown message for robot '" + robot + "': '" + message + "'");
 
   function metricToString(s) {
-    return parseSecondsIntoReadableTime(parseFloat(s));
-  }
-
-  function parseSecondsIntoReadableTime(timeInSeconds) {
-    const minutes = timeInSeconds / 60;
+    const minutes = s / 60;
     const absoluteMinutes = Math.floor(minutes);
     const m = absoluteMinutes > 9 ? absoluteMinutes : '0' + absoluteMinutes;
     const seconds = (minutes - absoluteMinutes) * 60;

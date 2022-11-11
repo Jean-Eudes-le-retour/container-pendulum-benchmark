@@ -16,100 +16,159 @@
 
 import subprocess
 import os
+from datetime import datetime
+from math import floor
 
-def record_animations(world_config, destination_directory, controller_name, supervisor_name):
+def _generate_animation_recorder_vrml(duration, output, controller_name):
+    return (
+        f'DEF ANIMATION_RECORDER_SUPERVISOR Robot {{\n'
+        f'  name "animation_recorder_supervisor"\n'
+        f'  controller "animator"\n'
+        f'  controllerArgs [\n'
+        f'    "--duration={duration}"\n'
+        f'    "--output={output}"\n'
+        f'    "--controller={controller_name}"\n'
+        f'  ]\n'
+        f'  supervisor TRUE\n'
+        f'}}\n'
+    )
+
+def record_animations(world_config, destination_directory, controller_name):
     # Create temporary directory
     subprocess.check_output(['mkdir', '-p', destination_directory])
 
-    # Temporary file changes:
-    #  - World file: change the robot's controller to <extern>
-    world_content = _replace_field(world_config['file'],
-        (f'controller "{os.environ["DEFAULT_CONTROLLER"]}"',), ('controller "<extern>"',))
-    
-    #  - Supervisor controller: change RECORD_ANIMATION to True
-    supervisor_content = _replace_field(f"controllers/{supervisor_name}/{supervisor_name}.py",
-        ("RECORD_ANIMATION = False",), ("RECORD_ANIMATION = True",))
+    # Temporary file changes*:
+    with open(world_config['file'], 'r') as f:
+        world_content = f.read()
+    updated_file = world_content.replace(f'controller "{os.environ["DEFAULT_CONTROLLER"]}"', 'controller "<extern>"')
 
-    #  - Recorder library: set variables for recorder.py
-    recorder_content = _replace_field(
-        f"controllers/{supervisor_name}/recorder/recorder.py",
-        (
-            'OUTPUT_FOLDER = "../../storage"',
-            'CONTROLLER_NAME = "animation_0"',
-            'MAX_DURATION = 10',
-            'METRIC = "percent"'
-        ),
-        (
-            f'OUTPUT_FOLDER = "{os.environ["PROJECT_PATH"]}/{destination_directory}"',
-            f'CONTROLLER_NAME = "{controller_name}"',
-            f'MAX_DURATION = {world_config["max-duration"]}',
-            f'METRIC = "{world_config["metric"]}"'
-        )
+    animation_recorder_vrml = _generate_animation_recorder_vrml(
+        duration = world_config['max-duration'],
+        output = destination_directory,
+        controller_name = controller_name
     )
-    
-    # Build the recorder and the controller containers with their respective Dockerfile
-    subprocess.check_output([
-        "docker", "build",
-        "--build-arg", f'PROJECT_PATH={os.environ["PROJECT_PATH"]}',
-        "-t", "recorder-webots",
-        "-f", "Dockerfile", "."
-    ])
-    # - Build the controller container from the cloned repository
-    subprocess.check_output([
-        "docker", "build",
-        "-t", "controller-docker",
-        "-f", f"controllers/{controller_name}/controller_Dockerfile",
-        f"controllers/{controller_name}"
-    ])
 
-    # Run the Webots container with Popen to read the stdout
+    with open(world_config['file'], 'w') as f:
+        f.write(updated_file + animation_recorder_vrml)
+    
+    # Building the Docker containers
+    recorder_build = subprocess.Popen(
+        [
+            "docker", "build",
+            "--build-arg", f'PROJECT_PATH={os.environ["PROJECT_PATH"]}',
+            "-t", "recorder-webots",
+            "-f", "Dockerfile", "."
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding='utf-8'
+    )
+    while recorder_build.poll() is None:
+        realtime_output = recorder_build.stdout.readline()
+        print(realtime_output.replace('\n', ''))
+    
+    controller_build = subprocess.Popen(
+        [
+            "docker", "build",
+            "-t", "controller-docker",
+            "-f", f"controllers/{controller_name}/controller_Dockerfile",
+            f"controllers/{controller_name}"
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding='utf-8'
+    )
+    while controller_build.poll() is None:
+        realtime_output = controller_build.stdout.readline()
+        print(realtime_output.replace('\n', ''))
+
+    # Run Webots container with Popen to read the stdout
     webots_docker = subprocess.Popen(
         [
-            "docker", "run", "-t", "--rm",
+            "docker", "run", "-t", "--rm", "--init",
             "--mount", f'type=bind,source={os.getcwd()}/tmp/animation,target={os.environ["PROJECT_PATH"]}/{destination_directory}',
-            "-p", "3005:1234", "recorder-webots"
+            "-p", "3005:1234",
+            "--env", "CI=true",
+            "recorder-webots"
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         encoding='utf-8'
     )
 
-    # - Read webots' stdout in real-time to know when to start the competitor's controller
     already_launched_controller = False
+    performance = 0
+    timeout = False
+    
     while webots_docker.poll() is None:
         realtime_output = webots_docker.stdout.readline()
         print(realtime_output.replace('\n', ''))
         if not already_launched_controller and "waiting for connection" in realtime_output:
-                print("Webots ready for controller, launching controller container...")
-                subprocess.Popen(["docker", "run", "--rm", "controller-docker"], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+                print("META SCRIPT: Webots ready for controller, launching controller container...")
+                subprocess.Popen(
+                    ["docker", "run", "--rm", "controller-docker"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT
+                )
                 already_launched_controller = True
         if already_launched_controller and "performance_line:" in realtime_output:
-            performance = realtime_output.strip().replace("performance_line:", "")
-        if ("docker" in realtime_output and "Error" in realtime_output) or ("'supervisor' controller exited with status: 1" in realtime_output):
-            subprocess.run(['/bin/bash', '-c', 'docker kill "$( docker ps -f "ancestor=recorder-webots" -q )"'])
-            subprocess.run(['/bin/bash', '-c', 'docker kill "$( docker ps -f "ancestor=controller-webots" -q )"'])
-    
-    # Removing the temporary changes:
-    # - Restoring the world file
+            performance = float(realtime_output.strip().replace("performance_line:", ""))
+            break
+        elif already_launched_controller and "Controller timeout" in realtime_output:
+            timeout = True
+            break
+
+    print("Closing the containers...")
+    webots_container_id = _get_container_id("recorder-webots")
+    if webots_container_id != '':
+        # Closing Webots with SIGINT to trigger animation export
+        subprocess.run(['/bin/bash', '-c', f'docker exec {webots_container_id} pkill -SIGINT webots-bin'])
+    controller_container_id = _get_container_id("controller-docker")
+    if controller_container_id != '':
+        subprocess.run(['/bin/bash', '-c', f'docker kill {controller_container_id}'])
+
+    # *Restoring temporary file changes
     with open(world_config['file'], 'w') as f:
         f.write(world_content)
-    # - Restoring the supervisor controller
-    with open(f"controllers/{supervisor_name}/{supervisor_name}.py", 'w') as f:
-        f.write(supervisor_content)
-    # - Restoring the recorder library
-    with open(f"controllers/{supervisor_name}/recorder/recorder.py", 'w') as f:
-        f.write(recorder_content)
-    
-    return performance
 
-def _replace_field(file, original_fields, updated_fields):
-    with open(file, 'r') as f:
-        file_content = f.read()
+    return _get_performance_line(timeout, performance, world_config)
 
-    updated_file = file_content
-    for original_field, updated_field in zip(original_fields, updated_fields):
-        updated_file = updated_file.replace(original_field, updated_field)
-    
-    with open(file, 'w') as f:
-        f.write(updated_file)
-    return file_content
+def _get_performance_line(timeout, performance, world_config):
+    metric = world_config['metric']
+    if not timeout:
+        # Benchmark completed normally
+        performance_line = _performance_format(performance, metric)
+    elif metric != 'time-duration':
+        # Benchmark failed: time limit reached
+        performance_line = _performance_format(0, metric)
+    else:
+        # Time-duration benchmark completed with maximum time
+        performance_line = _performance_format(world_config['max-duration'], metric)
+
+    return performance_line
+
+def _performance_format(performance, metric):
+    if performance == 0:
+        performance_string = "failure"
+    elif metric == "time-duration" or metric == "time-speed":
+        performance_string = _time_convert(performance)
+    elif metric ==  "percent":
+        performance_string = str(round(performance * 100, 2)) + '%'
+    elif metric == "distance":
+        performance_string = "{:.3f} m.".format(performance)
+    return f"{performance}:{performance_string}:{datetime.today().strftime('%Y-%m-%d')}"
+
+def _time_convert(time):
+    minutes = time / 60
+    absolute_minutes =  floor(minutes)
+    minutes_string = str(absolute_minutes).zfill(2)
+    seconds = (minutes - absolute_minutes) * 60
+    absolute_seconds =  floor(seconds)
+    seconds_string = str(absolute_seconds).zfill(2)
+    cs = floor((seconds - absolute_seconds) * 100)
+    cs_string = str(cs).zfill(2)
+    return minutes_string + "." + seconds_string + "." + cs_string
+
+# function to get the container id of a running container
+def _get_container_id(container_name):
+    container_id = subprocess.check_output(['docker', 'ps', '-f', f'ancestor={container_name}', '-q']).decode('utf-8').strip()
+    return container_id

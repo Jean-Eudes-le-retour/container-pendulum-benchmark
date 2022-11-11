@@ -17,16 +17,10 @@
 import os
 import shutil
 from pathlib import Path
-import subprocess
 from benchmark_record_action.animation import record_animations
 import benchmark_record_action.utils.git as git
 
-DESTINATION_DIRECTORY = 'tmp/animation'
-
-try:
-    SUPERVISOR_NAME = os.environ["SUPERVISOR_NAME"]
-except:
-    SUPERVISOR_NAME = "supervisor"
+TMP_DESTINATION_DIRECTORY = 'tmp/animation'
 
 class Competitor:
     def __init__(self, id, controller_repository):
@@ -83,52 +77,38 @@ def _clone_competitor_controller(competitor):
         competitor.username,
         competitor.repository_name
     )
-    subprocess.check_output(f'git clone {repo} {competitor.controller_path}', shell=True)
+
+    git.clone(repo, competitor.controller_path)
 
     print("done fetching repo")
-
 
 def _run_competitor_controller(world_config, competitor):
     print("\nRunning competitor's controller...")
 
-    # Save original world file
-    with open(world_config['file'], 'r') as f:
-        world_content = f.read()
-
-    # Run controller and record animation
-    _record_benchmark_animation(world_config, competitor)
-
-    # Revert to original world file
-    with open(world_config['file'], 'w') as f:
-        f.write(world_content)
-
-    print("done running competitor's controller")
-
-
-def _record_benchmark_animation(world_config, competitor):
+    animator_controller_source = os.path.join('benchmark_record_action', 'animator')
+    animator_controller_destination = os.path.join('controllers', 'animator')
+    _copy_directory(animator_controller_source, animator_controller_destination)
 
     # Record animation and return performance
     performance = record_animations(
         world_config,
-        DESTINATION_DIRECTORY,
-        competitor.controller_name,
-        SUPERVISOR_NAME
+        TMP_DESTINATION_DIRECTORY,
+        competitor.controller_name
     )
 
-    # Update competitors.txt and animation
-    _refresh_perf_and_animation(performance, competitor)
+    _update_animation_files(competitor)
+    _update_performance_line(performance, competitor)
 
     # Remove tmp files
-    shutil.rmtree('tmp')
+    _remove_directory('tmp')
+    _remove_directory(animator_controller_destination)
 
-    print('done recording animations')
+    print('done running controller and recording animations')
 
-def _refresh_perf_and_animation(performance, competitor):
-
-    # Move animations and format new performance
-    updated_competitor = _move_animations_and_format_perf(performance, competitor)
+def _update_performance_line(performance, competitor):
 
     # Only change the requested competitor's performance
+    updated_competitor_line = f"{competitor.id}:{competitor.controller_repository}:{performance}"
     tmp_competitors = ""
     with open('competitors.txt', 'r') as f:
         for line in f:
@@ -137,7 +117,7 @@ def _refresh_perf_and_animation(performance, competitor):
             test_id = line.split(':')[0]
 
             if test_id == competitor.id:
-                new_line = updated_competitor.strip()
+                new_line = updated_competitor_line.strip()
             else:
                 new_line = line
             # concatenate the new string and add an end-line break
@@ -146,24 +126,17 @@ def _refresh_perf_and_animation(performance, competitor):
     with open('competitors.txt', 'w') as f:
         f.write(tmp_competitors)
 
-def _move_animations_and_format_perf(performance, competitor):
-    
-    _, performance_value, performance_string, date = performance.split(':')
-
-    # performance
-    updated_competitor = f"{competitor.id}:{competitor.controller_repository}:{performance_value}:{performance_string}:{date}"
-    
-    # animations
+def _update_animation_files(competitor):
     new_destination_directory = os.path.join('storage', 'wb_animation_' + competitor.id)
+
     # remove old animation
-    subprocess.check_output(['rm', '-r', '-f', new_destination_directory])
+    _remove_directory(new_destination_directory)
     # replace by new animation
-    subprocess.check_output(['mkdir', '-p', new_destination_directory])
-    subprocess.check_output(f'mv {DESTINATION_DIRECTORY}/{competitor.controller_name}.* {new_destination_directory}', shell=True)
+    _copy_directory(TMP_DESTINATION_DIRECTORY, new_destination_directory)
+    _remove_directory(TMP_DESTINATION_DIRECTORY)
     
     _cleanup_storage_files(new_destination_directory)
-    
-    return updated_competitor
+    return 
 
 def _cleanup_storage_files(directory):
     if Path(directory).exists():
@@ -176,9 +149,16 @@ def _cleanup_storage_files(directory):
             elif path.endswith('.x3d'):
                 os.rename(path, directory + '/scene.x3d')
 
-
 def _remove_competitor_controller():
     for path in Path('controllers').glob('*'):
         controller = str(path).split('/')[1]
         if controller.startswith('competitor'):
             shutil.rmtree(path)
+
+def _remove_directory(directory):
+    if Path(directory).exists():
+        shutil.rmtree(directory)
+
+def _copy_directory(source, destination):
+    if Path(source).exists():
+        shutil.copytree(source, destination)
