@@ -9,10 +9,14 @@ import os
 import random
 import sys
 
-def benchmarkPerformance(message, robot):
-    benchmark_name = message.split(':')[1]
-    benchmark_performance_string = message.split(':')[2]
-    print(benchmark_name + ' Benchmark complete! Your performance was ' + benchmark_performance_string)
+BENCHMARK_NAME = "Inverted Pendulum"
+
+# function to convert a time in seconds to a string with format mm:ss:cs with zero padding
+def timeToString(time):
+    minutes = int(time / 60)
+    seconds = int(time - minutes * 60)
+    centiseconds = int((time - minutes * 60 - seconds) * 100)
+    return f"{minutes:02d}:{seconds:02d}.{centiseconds:02d}"
 
 # Get random generator seed value from 'controllerArgs' field
 seed = 1
@@ -37,22 +41,21 @@ running = True
 while robot.step(timestep) != -1 and running:
     if running:
         time = robot.getTime()
-        robot.wwiSendText("time:%-24.3f" % time)
-        robot.wwiSendText("force:%.2f" % force)
+        robot.wwiSendText(f"timeString_{timeToString(time)}")
+        robot.wwiSendText(f"force:{force:.2f}")
 
         # Detect status of inverted pendulum
         position = positionField.getSFFloat()
         if position < -1.58 or position > 1.58:
             # stop
             running = False
-            name = "Inverted Pendulum"
-            message = f'success:{name}:{time}'
+            message = f'success:{BENCHMARK_NAME}:{time}_{timeToString(time)}'
             robot.wwiSendText(message)
         else:
             if forceStep <= 0:
                 forceStep = 800 + random.randint(0, 400)
                 force = force + 0.02
-                toSend = "%.2lf %d" % (force, seed)
+                toSend = f"{force:.2f} {seed}"
                 if sys.version_info.major > 2:
                     toSend = bytes(toSend, "utf-8")
                 emitter.send(toSend)
@@ -64,6 +67,6 @@ CI = os.environ.get("CI")
 if CI:
     print(f"performance_line:{time}")
 else:
-    benchmarkPerformance(message, robot)
+    print(f"{BENCHMARK_NAME} benchmark complete! Your performance was {timeToString(time)}")
 
 robot.simulationSetMode(Supervisor.SIMULATION_MODE_PAUSE)
