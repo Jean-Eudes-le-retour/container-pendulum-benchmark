@@ -11,7 +11,7 @@ import sys
 
 def benchmarkPerformance(message, robot):
     benchmark_name = message.split(':')[1]
-    benchmark_performance_string = message.split(':')[3]
+    benchmark_performance_string = message.split(':')[2]
     print(benchmark_name + ' Benchmark complete! Your performance was ' + benchmark_performance_string)
 
 # Get random generator seed value from 'controllerArgs' field
