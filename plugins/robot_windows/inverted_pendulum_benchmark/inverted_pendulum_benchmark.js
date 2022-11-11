@@ -51,8 +51,8 @@ window.robotWindow.receive = function(message, robot) {
   } else
     console.log("Received unknown message for robot '" + robot + "': '" + message + "'");
 
-  function metricToString(s) {
-    const minutes = s / 60;
+  function metricToString(time) {
+    const minutes = time / 60;
     const absoluteMinutes = Math.floor(minutes);
     const m = absoluteMinutes > 9 ? absoluteMinutes : '0' + absoluteMinutes;
     const seconds = (minutes - absoluteMinutes) * 60;
