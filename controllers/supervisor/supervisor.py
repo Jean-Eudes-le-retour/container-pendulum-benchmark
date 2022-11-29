@@ -65,7 +65,7 @@ while robot.step(timestep) != -1 and running:
 # Performance output used by automated CI script
 CI = os.environ.get("CI")
 if CI:
-    print(f"performance_line:{time}")
+    print(f"performance:{time}")
 else:
     print(f"{BENCHMARK_NAME} benchmark complete! Your performance was {timeToString(time)}")
 
